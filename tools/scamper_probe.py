@@ -20,9 +20,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -50,6 +52,47 @@ def resolve_scamper(custom_bin: str = "scamper") -> str:
     )
 
 
+def resolve_target_address(target: str, ip_version: int | None = None) -> str:
+    """
+    Validate or resolve target address according to the desired IP version.
+
+    Parameters
+    ----------
+    target : str
+        Target hostname or IP address literal.
+    ip_version : int | None
+        4 for IPv4, 6 for IPv6, or None for unconstrained resolution.
+
+    Returns
+    -------
+    str
+        The validated IP address literal or resolved IP address / original target.
+    """
+    if ip_version is None:
+        return target
+
+    try:
+        ip = ipaddress.ip_address(target)
+        if ip_version == 4 and ip.version != 4:
+            raise ValueError(f"Target '{target}' is IPv{ip.version}, but IPv4 was requested.")
+        if ip_version == 6 and ip.version != 6:
+            raise ValueError(f"Target '{target}' is IPv{ip.version}, but IPv6 was requested.")
+        return target
+    except ValueError as e:
+        if "does not appear to be an IPv4 or IPv6 address" not in str(e):
+            raise
+
+    family = socket.AF_INET if ip_version == 4 else socket.AF_INET6
+    family_name = f"IPv{ip_version}"
+    try:
+        addrinfo = socket.getaddrinfo(target, None, family=family, type=socket.SOCK_STREAM)
+        if not addrinfo:
+            raise ValueError(f"Could not resolve {family_name} address for target: {target}")
+        return str(addrinfo[0][4][0])
+    except socket.gaierror as err:
+        raise ValueError(f"Failed to resolve {family_name} address for '{target}': {err}") from err
+
+
 def build_scamper_command(
     targets: list[str],
     output_file: Path,
@@ -60,6 +103,7 @@ def build_scamper_command(
     pps: int | None = None,
     use_sudo: bool = False,
     scamper_bin: str = "scamper",
+    ip_version: int | None = None,
 ) -> list[str]:
     """Construct the scamper CLI invocation."""
     cmd: list[str] = []
@@ -84,7 +128,8 @@ def build_scamper_command(
 
     # Target addresses
     for t in targets:
-        cmd.extend(["-i", t])
+        resolved_t = resolve_target_address(t, ip_version=ip_version)
+        cmd.extend(["-i", resolved_t])
 
     return cmd
 
@@ -143,6 +188,25 @@ def main() -> int:
         action="append",
         dest="targets",
         help="Target hostname/IP (can be specified multiple times, default: ns4.indosat.com)",
+    )
+    ip_group = parser.add_mutually_exclusive_group()
+    ip_group.add_argument(
+        "-4",
+        "--ipv4",
+        action="store_const",
+        dest="ip_version",
+        const=4,
+        default=None,
+        help="Force IPv4 address resolution for target hosts",
+    )
+    ip_group.add_argument(
+        "-6",
+        "--ipv6",
+        action="store_const",
+        dest="ip_version",
+        const=6,
+        default=None,
+        help="Force IPv6 address resolution for target hosts",
     )
     parser.add_argument(
         "--target-file",
@@ -227,22 +291,29 @@ def main() -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = build_scamper_command(
-        targets=targets,
-        output_file=args.output,
-        count=count,
-        interval=args.interval,
-        method=args.method,
-        payload_size=args.payload_size,
-        pps=args.pps,
-        use_sudo=args.sudo,
-        scamper_bin=args.scamper_bin,
-    )
+    try:
+        cmd = build_scamper_command(
+            targets=targets,
+            output_file=args.output,
+            count=count,
+            interval=args.interval,
+            method=args.method,
+            payload_size=args.payload_size,
+            pps=args.pps,
+            use_sudo=args.sudo,
+            scamper_bin=args.scamper_bin,
+            ip_version=args.ip_version,
+        )
+    except Exception as e:
+        print(f"[!] Error preparing scamper command: {e}", file=sys.stderr)
+        return 1
 
+    ip_ver_str = f"IPv{args.ip_version}" if args.ip_version else "Default (unconstrained)"
     print("=" * 60)
     print(" SCAMPER RTT PROBE COLLECTOR")
     print("=" * 60)
     print(f"  Targets        : {', '.join(targets)}")
+    print(f"  IP Version     : {ip_ver_str}")
     print(f"  Probe Count    : {count} per target")
     print(f"  Probe Interval : {args.interval}s")
     print(f"  Probe Method   : {args.method}")

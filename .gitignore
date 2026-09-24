@@ -159,6 +159,7 @@ cython_debug/
 .DS_Store
 .idea/
 .vscode/
+.agents/
 requirements-audit.txt
 results.json
 results.csv

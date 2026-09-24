@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- IPv4 and IPv6 options (`-4` / `--ipv4`, `-6` / `--ipv6`) across all Scamper probing utilities (`tools/scamper_probe.py`, `tools/scamper_ping_and_analyze.py`, `tools/probe_target.sh`, `tools/run_scamper.sh`), with automatic address family resolution, literal validation, and documentation in `SCAMPER.md`.
+
 ## [2.1.1] - 2026-09-23
 
 ### Added

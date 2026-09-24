@@ -106,6 +106,33 @@ uv run python tools/scamper_probe.py \
   --sudo
 ```
 
+#### 4. IPv4 and IPv6 Probing Options (`-4` / `-6`)
+All scamper tools support forcing IPv4 or IPv6 address resolution for target hostnames or IP address literals:
+- **`-4` / `--ipv4`**: Forces IPv4 address resolution (DNS A records) and validates that IP literals are IPv4.
+- **`-6` / `--ipv6`**: Forces IPv6 address resolution (DNS AAAA records) and validates that IP literals are IPv6.
+
+```bash
+# Force IPv4 probing for a hostname:
+uv run python tools/scamper_probe.py \
+  --target ns4.indosat.com \
+  --ipv4 \
+  --count 120 \
+  --output ns4_ipv4.json \
+  --sudo
+
+# Force IPv6 probing for a hostname or IPv6 address literal:
+uv run python tools/scamper_probe.py \
+  --target 2001:4860:4860::8888 \
+  --ipv6 \
+  --count 120 \
+  --output google_ipv6.json \
+  --sudo
+
+# Using shell scripts with -4 or -6:
+./tools/probe_target.sh -4 ns4.indosat.com 120 ns4_ipv4.json
+./tools/probe_target.sh -6 2001:4860:4860::8888 120 google_ipv6.json
+```
+
 ---
 
 ## 3. Feeding Saved JSON to Jitterbug (Later Analysis)
@@ -167,11 +194,21 @@ for idx, period in enumerate(congested_periods, 1):
 To probe and immediately run the analysis pipeline in a single step:
 
 ```bash
+# IPv4 end-to-end probing & analysis:
 uv run python tools/scamper_ping_and_analyze.py \
   --target ns4.indosat.com \
+  --ipv4 \
   --count 120 \
   --sudo \
   --plot congestion_analysis.png
+
+# IPv6 end-to-end probing & analysis:
+uv run python tools/scamper_ping_and_analyze.py \
+  --target 2001:4860:4860::8888 \
+  --ipv6 \
+  --count 120 \
+  --sudo \
+  --plot congestion_analysis_ipv6.png
 ```
 
 ---
@@ -205,10 +242,10 @@ When running `scamper -O json`, scamper produces newline-delimited JSON objects 
 
 | Script | Type | Description |
 |---|---|---|
-| [`tools/scamper_probe.py`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/scamper_probe.py) | Python CLI | **Probing only**: Probes targets (count/duration/method) and saves raw RTT data to JSON with summary statistics. |
-| [`tools/probe_target.sh`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/probe_target.sh) | Bash | **Probing only**: Fast shell wrapper for `sudo scamper` saving to JSON. |
-| [`tools/scamper_ping_and_analyze.py`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/scamper_ping_and_analyze.py) | Python CLI | **Combined**: Probes target, saves JSON, and runs Jitterbug analysis (supports `--analyze-only` and `--plot`). |
-| [`tools/run_scamper.sh`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/run_scamper.sh) | Bash | **Combined**: Shell pipeline executing `sudo scamper` followed by `jitterbug analyze`. |
+| [`tools/scamper_probe.py`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/scamper_probe.py) | Python CLI | **Probing only**: Probes targets (count/duration/method, `-4`/`-6`) and saves raw RTT data to JSON with summary statistics. |
+| [`tools/probe_target.sh`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/probe_target.sh) | Bash | **Probing only**: Fast shell wrapper for `sudo scamper` saving to JSON (supports `-4`/`-6`). |
+| [`tools/scamper_ping_and_analyze.py`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/scamper_ping_and_analyze.py) | Python CLI | **Combined**: Probes target (`-4`/`-6`), saves JSON, and runs Jitterbug analysis (supports `--analyze-only` and `--plot`). |
+| [`tools/run_scamper.sh`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/run_scamper.sh) | Bash | **Combined**: Shell pipeline executing `sudo scamper` (`-4`/`-6`) followed by `jitterbug analyze`. |
 
 ---
 

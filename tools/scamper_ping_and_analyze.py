@@ -14,7 +14,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +26,47 @@ from jitterbug.analyzer import JitterbugAnalyzer
 from jitterbug.models.config import JitterbugConfig
 
 
+def resolve_target_address(target: str, ip_version: int | None = None) -> str:
+    """
+    Validate or resolve target address according to the desired IP version.
+
+    Parameters
+    ----------
+    target : str
+        Target hostname or IP address literal.
+    ip_version : int | None
+        4 for IPv4, 6 for IPv6, or None for unconstrained resolution.
+
+    Returns
+    -------
+    str
+        The validated IP address literal or resolved IP address / original target.
+    """
+    if ip_version is None:
+        return target
+
+    try:
+        ip = ipaddress.ip_address(target)
+        if ip_version == 4 and ip.version != 4:
+            raise ValueError(f"Target '{target}' is IPv{ip.version}, but IPv4 was requested.")
+        if ip_version == 6 and ip.version != 6:
+            raise ValueError(f"Target '{target}' is IPv{ip.version}, but IPv6 was requested.")
+        return target
+    except ValueError as e:
+        if "does not appear to be an IPv4 or IPv6 address" not in str(e):
+            raise
+
+    family = socket.AF_INET if ip_version == 4 else socket.AF_INET6
+    family_name = f"IPv{ip_version}"
+    try:
+        addrinfo = socket.getaddrinfo(target, None, family=family, type=socket.SOCK_STREAM)
+        if not addrinfo:
+            raise ValueError(f"Could not resolve {family_name} address for target: {target}")
+        return str(addrinfo[0][4][0])
+    except socket.gaierror as err:
+        raise ValueError(f"Failed to resolve {family_name} address for '{target}': {err}") from err
+
+
 def run_scamper_ping(
     target: str,
     output_json: Path,
@@ -31,6 +74,7 @@ def run_scamper_ping(
     interval: float = 1.0,
     use_sudo: bool = False,
     scamper_bin: str = "scamper",
+    ip_version: int | None = None,
 ) -> Path:
     """
     Run scamper ping against a target and save the result as JSON.
@@ -49,6 +93,8 @@ def run_scamper_ping(
         Whether to invoke scamper with sudo (often required for raw socket / BPF access).
     scamper_bin : str
         Path or command name for the scamper binary.
+    ip_version : int | None
+        Optional IP version (4 for IPv4, 6 for IPv6, None for default).
 
     Returns
     -------
@@ -68,6 +114,8 @@ def run_scamper_ping(
             f"scamper binary '{scamper_bin}' not found in PATH or standard system locations."
         )
 
+    resolved_target = resolve_target_address(target, ip_version=ip_version)
+
     # Ensure parent output directory exists
     output_json.parent.mkdir(parents=True, exist_ok=True)
 
@@ -85,10 +133,11 @@ def run_scamper_ping(
             "-c",
             f"ping -c {count} -i {interval}",
             "-i",
-            target,
+            resolved_target,
         ]
     )
 
+    print(f"[*] Target: {target}" + (f" -> {resolved_target}" if resolved_target != target else ""))
     print(f"[*] Executing: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -217,6 +266,25 @@ def main() -> int:
         default="ns4.indosat.com",
         help="Target host to probe (default: ns4.indosat.com)",
     )
+    ip_group = parser.add_mutually_exclusive_group()
+    ip_group.add_argument(
+        "-4",
+        "--ipv4",
+        action="store_const",
+        dest="ip_version",
+        const=4,
+        default=None,
+        help="Force IPv4 address resolution for target host",
+    )
+    ip_group.add_argument(
+        "-6",
+        "--ipv6",
+        action="store_const",
+        dest="ip_version",
+        const=6,
+        default=None,
+        help="Force IPv6 address resolution for target host",
+    )
     parser.add_argument(
         "--count",
         type=int,
@@ -282,6 +350,7 @@ def main() -> int:
                 interval=args.interval,
                 use_sudo=args.sudo,
                 scamper_bin=args.scamper_bin,
+                ip_version=args.ip_version,
             )
 
         analyze_with_jitterbug(
