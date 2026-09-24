@@ -6,76 +6,99 @@ This guide explains how to collect Round-Trip Time (RTT) data using **[scamper](
 
 ## 1. Overview
 
-[Scamper](https://www.caida.org/catalog/software/scamper/) is a network measurement tool developed by CAIDA that supports active ping probing and can serialize measurements directly into newline-delimited JSON.
+[Scamper](https://www.caida.org/catalog/software/scamper/) is an active measurement tool developed by CAIDA that supports high-resolution ICMP, UDP, and TCP ping probing and serializes measurements directly into newline-delimited JSON.
 
 Jitterbug natively ingests scamper's JSON output (`-O json`), extracts transmission timestamps (`tx`) and round-trip times (`rtt`), computes minimum-RTT baselines across time windows, and detects network congestion periods.
 
 ---
 
-## 2. Quick Start
+## 2. Probing Target Only (Save to JSON)
 
-### Target Example: `ns4.indosat.com`
+Use [**`tools/scamper_probe.py`**](file:///Users/dikshie/VIRTUAL/jitterbug/tools/scamper_probe.py) or [**`tools/probe_target.sh`**](file:///Users/dikshie/VIRTUAL/jitterbug/tools/probe_target.sh) when you only want to collect RTT data and save it to JSON for later analysis.
 
-To probe `ns4.indosat.com` (120 probes at 1-second intervals) and immediately run Jitterbug congestion analysis:
+### Quick Example: Probe `ns4.indosat.com`
 
 ```bash
-# Using the integrated Python utility (recommended)
-uv run python tools/scamper_ping_and_analyze.py --target ns4.indosat.com --count 120 --sudo
+# Probe ns4.indosat.com for 120 packets (1s interval) and save to JSON
+uv run python tools/scamper_probe.py \
+  --target ns4.indosat.com \
+  --count 120 \
+  --output scamper_ns4_indosat.json \
+  --sudo
 ```
 
-Or using the shell helper:
+Or using the bash script:
 
 ```bash
-./tools/run_scamper.sh ns4.indosat.com 120 scamper_ns4_indosat.json analysis_results.json
+./tools/probe_target.sh ns4.indosat.com 120 scamper_ns4_indosat.json
+```
+
+### Advanced Probing Options
+
+#### Duration-Based Collection
+Collect continuous RTT data for a set time (e.g. 1 hour / 3600 seconds):
+```bash
+uv run python tools/scamper_probe.py \
+  --target ns4.indosat.com \
+  --duration 3600 \
+  --interval 1.0 \
+  --output ns4_1hour.json \
+  --sudo
+```
+
+#### Multiple Targets or Target List File
+```bash
+# Multiple targets on CLI:
+uv run python tools/scamper_probe.py \
+  --target ns4.indosat.com \
+  --target 8.8.8.8 \
+  --count 300 \
+  --sudo
+
+# From a targets file (one host/IP per line):
+uv run python tools/scamper_probe.py \
+  --target-file targets.txt \
+  --count 300 \
+  --output multi_targets.json \
+  --sudo
+```
+
+#### Probe Methods
+Choose between ICMP Echo, UDP, or TCP SYN:
+```bash
+uv run python tools/scamper_probe.py \
+  --target ns4.indosat.com \
+  --method icmp-echo \
+  --output ns4_icmp.json \
+  --sudo
 ```
 
 ---
 
-## 3. Manual Step-by-Step Workflow
+## 3. Feeding Saved JSON to Jitterbug (Later Analysis)
 
-### Step 1: Run Scamper and Save Output to JSON
+Once your JSON data has been collected, feed it into Jitterbug at any time.
 
-Run `scamper` with `-O json` to output JSON lines and specify the output file using `-o`:
+### Option A: CLI Validation & Analysis
 
 ```bash
-sudo scamper \
-  -O json \
-  -o scamper_ns4_indosat.json \
-  -c "ping -c 120 -i 1" \
-  -i ns4.indosat.com
-```
-
-> **Note on Permissions:**
-> On macOS (`/dev/bpf*`) and Linux (raw sockets), ICMP ping via `scamper` typically requires elevated privileges (`sudo`).
-
-### Scamper JSON Structure
-
-The output file contains JSON lines formatted as:
-
-```json
-{"type":"ping","src":"192.168.1.50","dst":"202.155.0.25","responses":[{"rtt":18.421,"tx":{"sec":1758700000,"usec":123456}}]}
-```
-
-- Each valid response provides an `rtt` (in milliseconds) and transmission time `tx` (`sec` + `usec` converted to epoch seconds).
-- Timeouts and non-ping records are automatically filtered by Jitterbug's loader.
-
----
-
-### Step 2: Feed JSON to Jitterbug
-
-#### Option A: Using the Jitterbug CLI
-
-Validate the collected dataset:
-```bash
+# 1. Validate dataset format and view sample summary:
 uv run jitterbug validate scamper_ns4_indosat.json --verbose
-```
 
-Run congestion analysis:
-```bash
+# 2. Run congestion inference and export results:
 uv run jitterbug analyze scamper_ns4_indosat.json --output analysis_results.json
 ```
 
-#### Option B: Using the Python API
+### Option B: Using `tools/scamper_ping_and_analyze.py` in `--analyze-only` Mode
+
+```bash
+uv run python tools/scamper_ping_and_analyze.py \
+  --output-json scamper_ns4_indosat.json \
+  --analyze-only \
+  --plot congestion_plot.png
+```
+
+### Option C: Using the Python API
 
 ```python
 from pathlib import Path
@@ -91,7 +114,7 @@ analyzer = JitterbugAnalyzer(config=config)
 # Load and analyze scamper JSON file
 results = analyzer.analyze_from_file(Path("scamper_ns4_indosat.json"), file_format="json")
 
-# Inspect results
+# Summary & Congestion periods
 print(f"Total inferences: {len(results.inferences)}")
 for period in results.get_congested_periods():
     print(
@@ -102,29 +125,24 @@ for period in results.get_congested_periods():
 
 ---
 
-## 4. Script Reference: `tools/scamper_ping_and_analyze.py`
+## 4. End-to-End Workflow (Probe + Immediate Analysis)
 
-The repository includes a dedicated tool script [**`tools/scamper_ping_and_analyze.py`**](file:///Users/dikshie/VIRTUAL/jitterbug/tools/scamper_ping_and_analyze.py).
-
-### Command-Line Arguments
-
-| Flag | Default | Description |
-|---|---|---|
-| `--target` | `ns4.indosat.com` | Target hostname or IP address |
-| `--count` | `120` | Number of ICMP probes to transmit |
-| `--interval` | `1.0` | Delay between probes in seconds |
-| `--output-json` | `scamper_ns4_indosat.json` | Path to save the raw Scamper JSON |
-| `--output-analysis` | `analysis_results.json` | Path to save Jitterbug inference JSON |
-| `--plot` | `None` | Optional path to export plot (e.g. `plot.png`) |
-| `--sudo` | `False` | Run scamper with `sudo` |
-| `--algorithm` | `ruptures` | Detection algorithm (`ruptures` or `bcp`) |
-| `--analyze-only` | `False` | Skip probing and analyze an existing JSON file |
-
-### Example: Analyze Existing File Only
+To probe and immediately analyze in one step:
 
 ```bash
 uv run python tools/scamper_ping_and_analyze.py \
-  --output-json scamper_ns4_indosat.json \
-  --analyze-only \
-  --plot congestion_plot.png
+  --target ns4.indosat.com \
+  --count 120 \
+  --sudo
 ```
+
+---
+
+## 5. Summary of Provided Scripts
+
+| Script | Purpose |
+|---|---|
+| [`tools/scamper_probe.py`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/scamper_probe.py) | **Probing only**: Probes targets (count/duration/method) and saves raw RTT data to JSON. |
+| [`tools/probe_target.sh`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/probe_target.sh) | **Probing only (Bash)**: Quick one-liner wrapper for `sudo scamper` saving to JSON. |
+| [`tools/scamper_ping_and_analyze.py`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/scamper_ping_and_analyze.py) | **Combined**: Probes target, saves JSON, and runs Jitterbug analysis (also supports `--analyze-only`). |
+| [`tools/run_scamper.sh`](file:///Users/dikshie/VIRTUAL/jitterbug/tools/run_scamper.sh) | **Combined (Bash)**: Shell pipeline running `sudo scamper` followed by `jitterbug analyze`. |
