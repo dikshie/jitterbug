@@ -11,6 +11,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - IPv4 and IPv6 options (`-4` / `--ipv4`, `-6` / `--ipv6`) across all Scamper probing utilities (`tools/scamper_probe.py`, `tools/scamper_ping_and_analyze.py`, `tools/probe_target.sh`, `tools/run_scamper.sh`), with automatic address family resolution, literal validation, and documentation in `SCAMPER.md`.
 
+## [2.5.0] - 2026-10-09
+
+### Added
+
+- Jitter dispersion in the online mode. `JitterAnalyzer.compute_causal_jitter_dispersion`
+  applies the offline filters (moving IQR, moving average) as trailing windows, so a value
+  never depends on later bins; the series is the offline one delayed by 6 bins at the default
+  orders and the threshold keeps its meaning. Both online back ends now follow
+  `jitter_analysis.method` for provisional and final verdicts (the config default,
+  `jitter_dispersion`, included; 2.4.0 always used the KS test online). A provisional verdict
+  with dispersion waits until the open period holds 12 dispersion values. `jitterbug stream`
+  and `jitterbug replay` take `--method`; `tools/replay_online.py` too. On the paper dataset
+  BCP + causal dispersion recovers 14 of the 15 reference periods of the paper's dispersion
+  output with none spurious, like the offline pipeline, with no provisional flips; pinned in
+  `tests/test_paper_regression.py` (`TestOnlineDispersionReplay`) and in the back ends table
+  of `docs/ONLINE_MODE.md`.
+
+### Changed
+
+- The online mode no longer forces the KS test: with the default configuration it uses jitter
+  dispersion, like `jitterbug analyze`. Pass `--method ks_test` (or set
+  `jitter_analysis.method`) for the 2.4.0 behavior.
+
+## [2.4.0] - 2026-10-09
+
+### Added
+
+- Online (streaming) mode. `jitterbug.streaming.OnlineJitterbug` consumes RTT samples one
+  at a time and emits change points and congestion verdicts as events: causal minimum-RTT
+  bins feed the Bayesian online change point detector of `bayesian-changepoint` 1.2 (`bcp`
+  extra), a change point is declared when the MAP run length drops, and each period gets a
+  provisional verdict (latency jump + KS test on the samples so far) and a final one when
+  the next change point closes it. Settings are the `streaming` section of `JitterbugConfig`
+  (`StreamingConfig`); the bin width, latency jump threshold, significance level and device
+  come from the shared sections. `jitterbug stream` infers congestion from `epoch,rtt` lines
+  on a file or standard input (`--follow`, `--events`) and prints JSON events; `jitterbug
+  replay` runs a recorded dataset through the online pipeline and scores it against a
+  reference (`--reference`, `--output`). On the paper dataset it recovers 14 of the 15
+  reference congestion periods with none spurious, like the offline pipeline, and reports
+  congestion onsets 15 min after they start (median; 90 min max); pinned in
+  `tests/test_paper_regression.py` (`TestOnlineReplay`). See `docs/ONLINE_MODE.md`.
+  Tools: `tools/replay_online.py` (replay and score, `--sweep`, a flag for every online
+  setting) and `tools/prefix_experiment.py` (how retrospective the offline pipeline is).
+- A second online back end, `streaming.backend: window` (`jitterbug stream --backend window`):
+  the offline sequential pipeline rerun on a trailing window (`window_hours`, default 72)
+  every `rerun_every_bins` closed bins, emitting a change point once it has been placed
+  within two bins of the same spot in `stable_runs` consecutive reruns, and final verdicts
+  as a contiguous chain whose boundaries are the emitted change points. It works with any
+  detector and jitter method and needs no new algorithm, at about 0.1 s per bin with BCP on
+  the paper dataset. Events carry `jitter_method` and `jitter_metric`.
+  `docs/ONLINE_MODE.md` compares the two back ends (table produced by
+  `tools/compare_online_backends.py`, the 4-bin-cadence row pinned in
+  `tests/test_paper_regression.py`); `jitterbug.streaming.create_online_analyzer` picks the
+  back end, and `two_period_verdict` is the decision rule both share.
+
+- Runtime comparison across releases (`docs/PERFORMANCE.md`) and the script that produces
+  it (`tools/benchmark_versions.py`). On the paper dataset with BCP + KS, 2.3.0 takes
+  2.8 s against 16.6 s for 1.0.0 (the gain comes from `bayesian-changepoint` 1.2); with
+  ruptures + KS, 2.1 and later are 1.5× faster than 2.0 thanks to the CSV loader (the
+  same holds with jitter dispersion). Raw measurements in
+  `examples/network_analysis/benchmarks/`. The runtime table in `docs/ALGORITHM_USAGE.md`
+  now shows measured numbers.
+- `docs/PERFORMANCE.md` credits the Bayesian change point library work behind the BCP
+  numbers (hildensia/bayesian_changepoint_detection #50, #76, #96, #100, #103, #106), with
+  Jitterbug's BCP + KS runtime and results for each library version it used. The README
+  links the library's upstream repository and documentation instead of the fork.
+- `docs/PERFORMANCE.md` correction: Jitterbug 2.0 with BCP 1.0 did not "take more than an
+  hour" because of the library alone. On the CPU it takes 118 s (34 periods); the hour was
+  on Apple's MPS, which BCP 1.0 picked by default. `tools/benchmark_versions.py run
+  --hide-mps` measures the CPU case.
+
+## [2.3.0] - 2026-09-24
+
+### Added
+
+- Zstandard (`.zst`) input and output. A path ending in `.zst` is decompressed on read
+  (`jitterbug analyze rtts.csv.zst`; the extension before `.zst` picks the format) and
+  compressed on write (`--output results.json.zst`, `results.csv.zst`, and the same in
+  `ResultExporter` and `JitterbugAnalyzer.save_results`). New `zstd` extra
+  (`zstandard`, only needed before Python 3.14, which has `compression.zstd`), included
+  in `all`. `.parquet.zst` is rejected, since Parquet is already compressed. See
+  `docs/INPUT_FORMATS.md`.
+
+### Changed
+
+- Text inputs and outputs (CSV, scamper JSON, JSON and CSV results) are read and written
+  as UTF-8 instead of the platform's default encoding.
+
+## [2.2.0] - 2026-09-24
+
+### Added
+
+- Non-sequential (clustering) analysis mode: `analysis_mode: clustering` /
+  `jitterbug analyze --mode clustering`. Minimum-RTT intervals are clustered by
+  (minimum RTT, jitter IQR) with a Gaussian mixture (components chosen by BIC), k-means,
+  or k-means with the silhouette-best k (`clustering.algorithm`, `--clustering-algorithm`);
+  every cluster is compared with the lowest-latency one by latency jump and a KS test on
+  raw jitter, wherever its intervals fall in time; a temporal smoothing
+  (`clustering.min_period_intervals`, default 2) merges the per-interval verdicts into
+  periods. Output is the usual `CongestionInferenceResult`, with a `clustering` summary
+  in the metadata. On the PAM 2022 dataset the GMM recovers 15 of the 15 reference
+  congestion periods; its 2 extra periods are at the two ends of the data, where the
+  minimum RTT is elevated but the sequential reference cannot give a verdict (sequential
+  BCP + KS: 14/15, 0 extra). New
+  `clustering` extra (scikit-learn), included in `all`; guide in
+  `docs/CLUSTERING_MODE.md`. The sequential mode stays the default and is unchanged.
+- Clustering mode: `clustering.min_ks_statistic` (default 0.1) requires the KS statistic,
+  not only the p-value, to show a jitter change. Clusters pool thousands of samples, so
+  the p-value is significant for negligible differences (p < 1e-49 for every cluster of
+  the PAM 2022 dataset, including one at the baseline's latency, whose statistic is
+  0.088; the congested clusters are at 0.21–0.32). `clustering.latency_threshold`
+  (default: `latency_jump.threshold`) sets a latency threshold for this mode alone.
+  Results on the PAM 2022 dataset are unchanged.
+- Documentation site built with MkDocs (Material theme): the guides in `docs/`, an API
+  reference generated from the docstrings, and the README, changelog, contributing
+  guide and citation included from the root files. CI builds it with `--strict` and
+  validates `CITATION.cff` on every PR; `.github/workflows/pages.yml` publishes it to
+  GitHub Pages from `main`. New `docs` dependency group.
+- The documentation is online at <https://estcarisimo.github.io/jitterbug/>: README badge,
+  the `Documentation` project URL (shown on PyPI from the next release) and the
+  repository website point to it.
+
+### Changed
+
+- American English is now a documented convention (`AGENTS.md`, `CONTRIBUTING.md`,
+  the review brief). Existing British spellings in docs, comments, the changelog and
+  one test name (`test_unrecognizable_content_is_an_error`) were corrected; no public
+  function, method, option or message changed.
+- README: the extras table lists `jupyter`.
+>>>>>>> upstream/main
+
 ## [2.1.1] - 2026-09-23
 
 ### Added
@@ -125,7 +256,7 @@ gone (see *Removed*). Python 3.10 or newer is required. The distribution is rena
   `metadata["dropped_rows"]`; unsorted rows are sorted (stable) with a warning instead of
   being rejected; a non-numeric cell is a `ValueError` naming the column and value. Before,
   the first bad row surfaced as a Pydantic error from inside the loading loop. The loop
-  itself is vectorised: the bundled dataset loads in 0.1 s instead of 1 s.
+  itself is vectorized: the bundled dataset loads in 0.1 s instead of 1 s.
 - The scamper JSON reader applies the same RTT bounds per response: a `ping` response
   with an RTT of 0 (a timeout) or above 10 s no longer makes the whole file fail with a
   Pydantic error; it is dropped with a warning and counted in
@@ -149,7 +280,7 @@ gone (see *Removed*). Python 3.10 or newer is required. The distribution is rena
 - All temporary ruff ignores are gone except `B008` (Typer's `Option(...)` defaults):
   `pathlib` everywhere (`Path.open`, `/`, `mkdir`, `iterdir`), `raise ... from` inside
   every `except`, collapsed nested conditions, no line over 100 characters. `tools/`
-  scripts no longer patch `sys.path` to a directory that does not exist. Behaviour
+  scripts no longer patch `sys.path` to a directory that does not exist. Behavior
   unchanged (CLI output on the bundled dataset is identical).
 - `pyproject.toml` is the single source of packaging metadata; `setup.py`,
   `requirements.txt`, `requirements-new.txt` and `install_dev.sh` are gone. The build
@@ -181,10 +312,10 @@ gone (see *Removed*). Python 3.10 or newer is required. The distribution is rena
 - Change point timestamps are timezone-aware UTC, like the measurements they come from.
   They used to be naive local time, so `start_timestamp`/`end_timestamp` in results
   files and the CLI table depended on the machine's timezone (the epochs were always
-  right). The CLI table columns are now labelled `Start (UTC)` / `End (UTC)`.
+  right). The CLI table columns are now labeled `Start (UTC)` / `End (UTC)`.
 - `DataLoader.validate_data()` returns plain Python numbers and booleans (it used to
   return numpy scalars, which `json.dumps` rejects); CSV datasets record `source: csv`
-  and the file path in their metadata; `.jsonl` is recognised as scamper JSON.
+  and the file path in their metadata; `.jsonl` is recognized as scamper JSON.
 - `jitterbug analyze` and `jitterbug visualize` no longer overwrite the `algorithm`,
   `method`, `threshold` and `output_format` values of a `--config` file with the CLI's
   own defaults; a flag now overrides the file only when it is given explicitly. A wrong
@@ -196,7 +327,7 @@ gone (see *Removed*). Python 3.10 or newer is required. The distribution is rena
   analysis yields no inferences the confidence heatmap is an empty placeholder instead
   of an `imshow` error, so the command still writes its five files.
 - Time axes in every plot use matplotlib's automatic date locator and concise formatter
-  instead of one labelled tick per hour, which produced an unreadable axis on multi-day
+  instead of one labeled tick per hour, which produced an unreadable axis on multi-day
   series.
 - The Bayesian detector no longer swallows exceptions and returns "no change points";
   a failure is raised as `RuntimeError` with the cause attached.
@@ -214,7 +345,7 @@ gone (see *Removed*). Python 3.10 or newer is required. The distribution is rena
 - The `influx` *file* format: `--format influx` and `.flux`/`.influx` files were routed to
   a placeholder that raised `NotImplementedError`. Loading from an InfluxDB server through
   `DataLoader.load_from_influxdb()` is unchanged. Format inference now fails with a clear
-  message instead of guessing `influx` for anything it does not recognise.
+  message instead of guessing `influx` for anything it does not recognize.
 - Dead code in `analysis/`: `LatencyJumpAnalyzer.analyze_detailed`,
   `CongestionInferenceAnalyzer._apply_inference_logic` and `_post_process_inferences`
   implemented alternative rules that nothing called.
@@ -227,7 +358,7 @@ gone (see *Removed*). Python 3.10 or newer is required. The distribution is rena
 - **The experimental `torch`, `rbeast` and `adtk` detectors** and their extras. None of
   them was evaluated in the paper; `torch` was a heuristic rather than a trained model,
   and `rbeast`/`adtk` silently fell back to an internal statistical method when their
-  package was missing while still labelling the output with the back end's name. The
+  package was missing while still labeling the output with the back end's name. The
   detectors are now `ruptures` (default) and `bcp`. `algorithms.py` shrinks from 1 215
   to 318 lines; `examples/interactive_algorithm_selector.py` and the stale plots for the
   removed detectors are gone, and `examples/network_analysis/plots/` was regenerated
@@ -255,7 +386,11 @@ Typer CLI, optional REST API and visualization modules. See the
 Original implementation accompanying the paper *Jitterbug: A new framework for
 jitter-based congestion inference* (PAM 2022).
 
-[Unreleased]: https://github.com/estcarisimo/jitterbug/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/estcarisimo/jitterbug/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/estcarisimo/jitterbug/compare/v2.4.0...v2.5.0
+[2.4.0]: https://github.com/estcarisimo/jitterbug/compare/v2.3.0...v2.4.0
+[2.3.0]: https://github.com/estcarisimo/jitterbug/compare/v2.2.0...v2.3.0
+[2.2.0]: https://github.com/estcarisimo/jitterbug/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/estcarisimo/jitterbug/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/estcarisimo/jitterbug/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/estcarisimo/jitterbug/compare/v1.0.0...v2.0.0

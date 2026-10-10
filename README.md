@@ -3,6 +3,7 @@
 A Python framework for inferring Internet path congestion from Round-Trip Time (RTT) measurements. Jitterbug splits an RTT time series at change points, then classifies each period as congested or not by combining a latency-jump test with a jitter test (jitter dispersion or Kolmogorov–Smirnov). It implements the method from *Jitterbug: A New Framework for Jitter-Based Congestion Inference* (PAM 2022) and ships the paper's dataset so you can reproduce it in one command.
 
 [![PyPI](https://img.shields.io/pypi/v/jitterbug-inference.svg)](https://pypi.org/project/jitterbug-inference/)
+[![Docs](https://img.shields.io/badge/docs-estcarisimo.github.io%2Fjitterbug-blue.svg)](https://estcarisimo.github.io/jitterbug/)
 [![CI](https://github.com/estcarisimo/jitterbug/actions/workflows/ci.yml/badge.svg)](https://github.com/estcarisimo/jitterbug/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -13,6 +14,7 @@ A Python framework for inferring Internet path congestion from Round-Trip Time (
 - 📉 **Congestion inference from RTTs alone**: no active probing beyond the pings you already have
 - 🔀 **Pluggable change point detection**: `ruptures` out of the box, the paper's Bayesian detector (`bcp`) as an extra
 - 📐 **Two jitter tests**: jitter dispersion (moving IQR + moving average) or a Kolmogorov–Smirnov test between periods
+- 🧩 **Non-sequential mode**: cluster 15-minute intervals by (latency, jitter) with a Gaussian mixture or k-means and compare each cluster with the baseline, no matter when its intervals occur
 - 📁 **Multiple input formats**: CSV, scamper JSON, and InfluxDB queries
 - 📊 **Rich terminal output**: summary and per-period tables, plus JSON or CSV results files
 - ⚙️ **Typed configuration**: Pydantic models, YAML/JSON config files, `JITTERBUG_*` environment variables
@@ -49,9 +51,12 @@ See [docs/INSTALLATION.md](https://github.com/estcarisimo/jitterbug/blob/main/do
 
 | Extra | Installs | Use it for |
 | --- | --- | --- |
-| `bcp` | [bayesian-changepoint](https://pypi.org/project/bayesian-changepoint/) + torch | The Bayesian detector used in the paper |
+| `bcp` | [bayesian-changepoint](https://pypi.org/project/bayesian-changepoint/) + torch | The Bayesian detector used in the paper, and the online mode (`jitterbug stream` / `replay`) |
+| `clustering` | scikit-learn | The non-sequential mode (`--mode clustering`) |
 | `influx` | influxdb-client | Loading RTTs straight from InfluxDB |
+| `zstd` | zstandard (not needed on Python 3.14+) | Reading and writing `.zst`-compressed files |
 | `visualization` | matplotlib | `jitterbug visualize` and the plotting helpers |
+| `jupyter` | JupyterLab, ipykernel | The notebooks in `examples/` |
 | `all` | everything above | |
 
 ```bash
@@ -77,11 +82,18 @@ jitterbug analyze examples/network_analysis/data/raw.csv --output results.json
 # Reproduce the paper: Bayesian change points + KS test (needs `uv sync --extra bcp`)
 jitterbug analyze examples/network_analysis/data/raw.csv --algorithm bcp --method ks_test
 
+# Non-sequential mode: cluster intervals by (latency, jitter) (needs `--extra clustering`)
+jitterbug analyze examples/network_analysis/data/raw.csv --mode clustering
+
 # Only the summary table
 jitterbug analyze examples/network_analysis/data/raw.csv --summary-only
 
 # CSV instead of JSON (Parquet is also supported if `pyarrow` is installed)
 jitterbug analyze rtts.csv --output results.csv --output-format csv
+
+# Zstandard-compressed input and output: a trailing .zst is enough (needs the `zstd` extra
+# before Python 3.14)
+jitterbug analyze rtts.csv.zst --output results.json.zst
 ```
 
 ### Validate input before analyzing
@@ -99,6 +111,20 @@ jitterbug visualize examples/network_analysis/data/raw.csv --output-dir plots
 ```
 
 The figures are described in [docs/VISUALIZATION_USAGE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/VISUALIZATION_USAGE.md), together with the `JitterbugPlotter` API for your own scripts.
+
+### Online mode: stream and replay
+
+```bash
+# Infer congestion as samples arrive: `epoch,rtt` lines on stdin, one JSON event per line;
+# needs `uv sync --extra bcp`
+my-probe | jitterbug stream --events verdicts
+
+# Replay a recorded dataset through the online pipeline and score it against a reference
+jitterbug replay examples/network_analysis/data/raw.csv --method ks_test \
+  --reference examples/network_analysis/expected_results/kstest_inferences.csv
+```
+
+On the paper dataset congestion onsets are reported 15 min after they start (median; 90 min at most); see [docs/ONLINE_MODE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/ONLINE_MODE.md) for the method, the results on the paper dataset and the `streaming` configuration section.
 
 ### Configuration files
 
@@ -180,6 +206,8 @@ dataset = DataLoader().load_from_influxdb(
 Every option lives in a Pydantic model and can be set from a YAML/JSON file or from the CLI flags. `jitterbug config --template` prints the full set; the important ones:
 
 ```yaml
+analysis_mode: sequential      # sequential | clustering (see docs/CLUSTERING_MODE.md)
+
 change_point_detection:
   algorithm: ruptures          # ruptures | bcp
   threshold: 0.25
@@ -202,6 +230,11 @@ data_processing:
   outlier_detection: true
   outlier_threshold: 3.0
 
+clustering:                    # used when analysis_mode is clustering
+  algorithm: gmm               # gmm | kmeans | kmeans_silhouette
+  min_period_intervals: 2      # temporal smoothing, in intervals
+  min_ks_statistic: 0.1        # smallest KS statistic that counts as a jitter change
+
 output_format: json            # json | csv | parquet (parquet needs pyarrow)
 verbose: false
 ```
@@ -221,6 +254,8 @@ export JITTERBUG_OUTPUT_FORMAT=csv
 4. **Jitter test**: jitter dispersion (variance of the filtered jitter series) or a KS test of the RTT distributions on both sides of the change point.
 5. **Congestion inference**: a period is congested when both tests agree; each result carries a confidence and the evidence behind it.
 
+The **clustering mode** (`--mode clustering`) replaces steps 2–3's sequential comparison: intervals are clustered by (minimum RTT, jitter IQR) and each cluster is compared with the lowest-latency one, wherever its intervals fall in time. On the paper dataset the Gaussian mixture recovers all 15 reference congestion periods, plus 2 at the ends of the data where the sequential reference has no verdict. See [docs/CLUSTERING_MODE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/CLUSTERING_MODE.md).
+
 `ruptures` and `bcp` are the two detectors evaluated in the paper; see [docs/ALGORITHM_SELECTION_GUIDE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/ALGORITHM_SELECTION_GUIDE.md) for when to use which.
 
 ## 🏗️ Architecture
@@ -238,9 +273,12 @@ src/jitterbug/
 ├── analysis/               # Period classification
 │   ├── latency_jump_analyzer.py
 │   ├── jitter_analyzer.py  #   jitter dispersion and KS test
-│   └── congestion_inference_analyzer.py
+│   ├── congestion_inference_analyzer.py
+│   └── clustering_analyzer.py     # non-sequential mode (GMM / k-means over intervals)
+├── streaming/              # Online mode: OnlineJitterbug (Bayesian online change points) and
+│                           #   SlidingWindowJitterbug (offline pipeline on a window); replay/score
 ├── io/                     # DataLoader (CSV, scamper JSON, InfluxDB) and exporters
-├── cli/main.py             # Typer CLI: analyze, validate, config, visualize, version
+├── cli/main.py             # Typer CLI: analyze, validate, config, visualize, stream, replay, version
 └── visualization/          # JitterbugPlotter (matplotlib): the figures behind `jitterbug visualize`
 ```
 
@@ -358,6 +396,7 @@ Contributions are welcome! Please see the [Contributing Guide](https://github.co
 | [docs/ALGORITHM_SELECTION_GUIDE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/ALGORITHM_SELECTION_GUIDE.md) | Choosing a change point detector |
 | [docs/ALGORITHM_USAGE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/ALGORITHM_USAGE.md) | Per-detector options and examples |
 | [docs/VISUALIZATION_USAGE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/VISUALIZATION_USAGE.md) | `jitterbug visualize`, the five figures, `JitterbugPlotter` |
+| [docs/PERFORMANCE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/PERFORMANCE.md) | Runtime across releases, and where the speedup comes from |
 | [examples/README.md](https://github.com/estcarisimo/jitterbug/blob/main/examples/README.md) | Scripts and notebooks |
 
 ## 📄 License
@@ -367,11 +406,11 @@ This project is licensed under the MIT License - see the [LICENSE](https://githu
 ## 🔗 Related Resources
 
 - [Jitterbug paper (PAM 2022)](https://doi.org/10.1007/978-3-030-98785-5_7)
-- [bayesian_changepoint_detection](https://github.com/estcarisimo/bayesian_changepoint_detection): the Bayesian detector behind the `bcp` extra
+- [bayesian_changepoint_detection](https://github.com/hildensia/bayesian_changepoint_detection) ([docs](https://estcarisimo.github.io/bayesian_changepoint_detection/), PyPI [`bayesian-changepoint`](https://pypi.org/project/bayesian-changepoint/)): the Bayesian detector behind the `bcp` extra. Its 1.2 release made the paper's configuration about 6× faster than Jitterbug 1.0 and more accurate than the version Jitterbug used before; see [docs/PERFORMANCE.md](https://github.com/estcarisimo/jitterbug/blob/main/docs/PERFORMANCE.md#what-changed-in-the-bayesian-library)
 - [ruptures](https://centre-borelli.github.io/ruptures-docs/): the default change point library
 - [scamper](https://www.caida.org/catalog/software/scamper/): the measurement tool whose JSON output Jitterbug reads
 
-## 🙏 Acknowledgements
+## 🙏 Acknowledgments
 
 Jitterbug is the software behind the following paper. If you use it in your research, please cite it (also available as [CITATION.cff](https://github.com/estcarisimo/jitterbug/blob/main/CITATION.cff) for GitHub's "Cite this repository" button):
 

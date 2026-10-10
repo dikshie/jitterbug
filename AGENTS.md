@@ -30,15 +30,21 @@ src/jitterbug/
   detection/             change_point_detector.py (dispatch by config.algorithm),
                          algorithms.py (RupturesDetector, BayesianChangePointDetector)
   analysis/              jitter_analyzer.py (dispersion, KS test), latency_jump_analyzer.py,
+                         clustering_analyzer.py (non-sequential mode, `analysis_mode: clustering`),
                          congestion_inference_analyzer.py
+  streaming/             online_analyzer.py (OnlineJitterbug, `backend: bocpd`: causal bins →
+                         Bayesian online change point detection → provisional/final verdicts;
+                         `bcp` extra), window_backend.py (SlidingWindowJitterbug, `backend:
+                         window`: offline pipeline rerun on a trailing window), verdict.py
+                         (the two-period rule both share), replay.py (replay, score)
   io/                    data_loader.py (CSV, scamper JSON, InfluxDB), exporters.py
-  cli/main.py            Typer CLI: `jitterbug analyze|validate|config|visualize|version`
+  cli/main.py            Typer CLI: `jitterbug analyze|validate|config|visualize|stream|replay|version`
   visualization/         plotter.py (JitterbugPlotter, matplotlib)
 tests/                   pytest; test_cli.py runs the CLI on the bundled dataset;
                          test_paper_regression.py pins the paper-dataset results
 examples/network_analysis/data/raw.csv         PAM 2022 dataset (47 163 RTT samples)
 examples/network_analysis/expected_results/    reference output of the paper (BCP + KS)
-docs/                    plain Markdown guides
+docs/                    Markdown guides + API stubs, built into the MkDocs site (mkdocs.yml)
 ```
 
 ## Commands
@@ -54,6 +60,7 @@ uv run pytest -m "not slow"                # seconds
 uv run pytest                              # + Bayesian regression (~2 s more, needs --extra bcp)
 uv run jitterbug analyze examples/network_analysis/data/raw.csv --output /tmp/r.json
 uv build                                   # sdist + wheel via uv_build
+uv run --group docs mkdocs build --strict  # docs site (mkdocs.yml); `mkdocs serve` to preview
 ```
 
 ## Conventions
@@ -65,6 +72,11 @@ uv build                                   # sdist + wheel via uv_build
 - `pathlib.Path` for paths; `logging` with a module-level logger, never `print`, in
   `src/` outside `cli/`.
 - NumPy-style docstrings on public API. Type hints on every function.
+- American English everywhere: identifiers (functions, methods, parameters, options),
+  docstrings, comments, log and error messages, docs, CHANGELOG, commit messages and PR
+  text. `analyze`, `visualize`, `behavior`, `color`, `labeled`, `serialize`, not
+  `analyse`, `visualise`, `behaviour`, `colour`, `labelled`, `serialise`. `analyses` is
+  the plural of *analysis* and is fine. Quoted titles, names and URLs stay as they are.
 - All settings live in Pydantic models in `models/config.py`; new options go there,
   then the CLI, then docs.
 - Tests: plain functions, fixtures, `parametrize`; small synthetic series; floats via
@@ -81,6 +93,25 @@ uv build                                   # sdist + wheel via uv_build
   experimental `torch`, `rbeast` and `adtk` detectors were removed in 2.1; do not
   reintroduce silent fallbacks. `get_available_algorithms()` checks with
   `importlib.util.find_spec`, so it only lists what can run.
+- Two analysis modes: `sequential` (default, the paper's method; its results are pinned)
+  and `clustering` (`clustering` extra, scikit-learn imported lazily). Changing the
+  default mode or the clustering defaults changes golden values in
+  `tests/test_paper_regression.py`; update them and the table in
+  `docs/CLUSTERING_MODE.md` together.
+- The online mode (`jitterbug.streaming`, `stream`/`replay`) has two back ends. `bocpd`
+  (default) uses the MAP run-length rule of `bayesian_changepoint_detection.streaming`
+  (`bcp` extra); the fixed-delay rules (`decision: lag|window`) always produce spurious
+  congested periods on the paper dataset, see `docs/ONLINE_MODE.md`. Both jitter methods
+  work online: KS on raw jitter, dispersion through the trailing filters of
+  `JitterAnalyzer.compute_causal_jitter_dispersion` (offline series delayed by 6 bins;
+  provisional verdicts wait for 12 dispersion values). `window` reruns the offline pipeline
+  on a trailing window (any detector; the window start stands in for the index-0 change
+  point).
+  Both are pinned on the paper dataset in `tests/test_paper_regression.py`
+  (`TestOnlineReplay`, `TestOnlineDispersionReplay`, `TestSlidingWindowReplay`); changing
+  defaults changes those goldens
+  and the table in `docs/ONLINE_MODE.md` (regenerate it with
+  `tools/compare_online_backends.py`).
 - Plotting is matplotlib only (`JitterbugPlotter`). The plotly dashboard and
   interactive modules were removed in 2.1; do not add plotly back without an explicit
   request for interactivity.

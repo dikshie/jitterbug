@@ -14,7 +14,7 @@ pip install "jitterbug-inference[bcp,visualization]"       # the paper's setup p
 uv tool install "jitterbug-inference[bcp]"                  # the CLI in its own environment
 ```
 
-Pin a version for reproducible runs: `pip install "jitterbug-inference==2.1.1"`.
+Pin a version for reproducible runs: `pip install "jitterbug-inference==2.5.0"`.
 
 ## From a clone with uv (recommended)
 
@@ -33,7 +33,9 @@ dependency group (pytest, ruff, mypy). Add extras as needed:
 | --- | --- | --- |
 | `bcp` | [bayesian-changepoint](https://pypi.org/project/bayesian-changepoint/) + torch | `--algorithm bcp`, the paper's detector |
 | `visualization` | matplotlib | `jitterbug visualize`, `JitterbugPlotter` |
+| `clustering` | scikit-learn | `--mode clustering`, the non-sequential mode |
 | `influx` | influxdb-client | `DataLoader.load_from_influxdb` |
+| `zstd` | zstandard (Python < 3.14 only) | `.zst` input and output files |
 | `jupyter` | JupyterLab, ipykernel | the notebooks in `examples/` |
 | `all` | all of the above | |
 
@@ -60,7 +62,7 @@ pip install -e ".[visualization]"        # extras in brackets, as usual
 pip install "jitterbug-inference[visualization] @ git+https://github.com/estcarisimo/jitterbug.git"
 ```
 
-Or a tag: `...jitterbug.git@v2.1.1`.
+Or a tag: `...jitterbug.git@v2.5.0`.
 
 ## Notes on the `bcp` extra
 
@@ -99,5 +101,5 @@ uv run python -c "from jitterbug.detection import get_available_algorithms; prin
 
 ## Developer setup
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md): `uv sync --extra visualization`,
+See [CONTRIBUTING.md](https://github.com/estcarisimo/jitterbug/blob/main/CONTRIBUTING.md): `uv sync --extra visualization`,
 `uv run pre-commit install`, then `uv run pytest -m "not slow"`.

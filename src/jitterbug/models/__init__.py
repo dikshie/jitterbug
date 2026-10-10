@@ -11,10 +11,12 @@ from .analysis import (
 )
 from .config import (
     ChangePointDetectionConfig,
+    ClusteringConfig,
     DataProcessingConfig,
     JitterAnalysisConfig,
     JitterbugConfig,
     LatencyJumpConfig,
+    StreamingConfig,
 )
 from .rtt_data import MAX_RTT_MS, MinimumRTTDataset, RTTDataset, RTTMeasurement
 
@@ -33,4 +35,6 @@ __all__ = [
     "JitterAnalysisConfig",
     "LatencyJumpConfig",
     "DataProcessingConfig",
+    "ClusteringConfig",
+    "StreamingConfig",
 ]

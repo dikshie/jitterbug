@@ -7,9 +7,16 @@ from pathlib import Path
 
 import pandas as pd
 
-from .analysis import CongestionInferenceAnalyzer, JitterAnalyzer, LatencyJumpAnalyzer
+from .analysis import (
+    ClusteringCongestionAnalyzer,
+    CongestionInferenceAnalyzer,
+    JitterAnalyzer,
+    LatencyJumpAnalyzer,
+)
 from .detection import ChangePointDetector
 from .io import DataLoader
+from .io.compression import open_text
+from .io.exporters import reject_zstd_parquet
 from .models import (
     ChangePoint,
     CongestionInferenceResult,
@@ -86,6 +93,16 @@ class JitterbugAnalyzer:
         self.jitter_analyzer = JitterAnalyzer(self.config.jitter_analysis)
         self.latency_jump_analyzer = LatencyJumpAnalyzer(self.config.latency_jump)
         self.congestion_inference_analyzer = CongestionInferenceAnalyzer()
+        self.clustering_analyzer = ClusteringCongestionAnalyzer(
+            self.config.clustering,
+            latency_threshold=(
+                self.config.clustering.latency_threshold
+                if self.config.clustering.latency_threshold is not None
+                else self.config.latency_jump.threshold
+            ),
+            significance_level=self.config.jitter_analysis.significance_level,
+            interval_minutes=self.config.data_processing.minimum_interval_minutes,
+        )
 
     def analyze_from_file(
         self, file_path: str | Path, file_format: str | None = None
@@ -180,6 +197,9 @@ class JitterbugAnalyzer:
                 },
             )
 
+        if self.config.analysis_mode == "clustering":
+            return self._analyze_clustering(rtt_data, min_rtt_data)
+
         # Step 2: Detect change points
         logger.info("Detecting change points")
         change_points = self.change_point_detector.detect(min_rtt_data)
@@ -241,6 +261,48 @@ class JitterbugAnalyzer:
 
         return result
 
+    def _analyze_clustering(
+        self, rtt_data: RTTDataset, min_rtt_data: MinimumRTTDataset
+    ) -> CongestionInferenceResult:
+        """
+        Non-sequential mode: cluster minimum-RTT intervals instead of detecting change points.
+
+        Parameters
+        ----------
+        rtt_data : RTTDataset
+            Raw RTT measurements.
+        min_rtt_data : MinimumRTTDataset
+            Minimum-RTT intervals of ``rtt_data`` (for the metadata and the plots).
+
+        Returns
+        -------
+        CongestionInferenceResult
+            Periods of consecutive intervals with the same verdict. ``metadata`` carries
+            ``analysis_mode`` and a ``clustering`` summary (clusters, their statistics
+            and the model-selection scores).
+        """
+        logger.info(f"Clustering minimum-RTT intervals ({self.config.clustering.algorithm})")
+        self.change_points = []
+        outcome = self.clustering_analyzer.analyze(rtt_data)
+        inferences = outcome.inferences
+        result = CongestionInferenceResult(
+            inferences=inferences,
+            metadata={
+                "analysis_mode": "clustering",
+                "total_measurements": len(rtt_data),
+                "min_intervals": len(min_rtt_data),
+                "change_points": 0,
+                "congestion_periods": len([ci for ci in inferences if ci.is_congested]),
+                "clustering": outcome.metadata(self.config.clustering.algorithm),
+                "config": self.config.model_dump(),
+            },
+        )
+        logger.info(
+            f"Analysis complete: {len(inferences)} periods, "
+            f"{len(result.get_congested_periods())} congestion periods found"
+        )
+        return result
+
     def save_results(
         self, results: CongestionInferenceResult, output_path: str | Path, format: str | None = None
     ) -> None:
@@ -252,9 +314,17 @@ class JitterbugAnalyzer:
         results : CongestionInferenceResult
             Analysis results to save.
         output_path : Union[str, Path]
-            Path to save results to.
+            Path to save results to. JSON and CSV are compressed with Zstandard when it
+            ends in ``.zst`` (``results.json.zst``).
         format : Optional[str]
             Output format ('json', 'csv', 'parquet'). If None, uses config default.
+
+        Raises
+        ------
+        ValueError
+            If the format is unknown, or Parquet is requested with a ``.zst`` path.
+        ImportError
+            If the path ends in ``.zst`` and no Zstandard codec is available.
         """
         output_path = Path(output_path)
         format = format or self.config.output_format
@@ -262,14 +332,16 @@ class JitterbugAnalyzer:
         if format == "json":
             import json
 
-            with output_path.open("w") as f:
+            with open_text(output_path, "w") as f:
                 json.dump(results.model_dump(), f, indent=2, default=str)
 
         elif format == "csv":
             df = results.to_dataframe()
-            df.to_csv(output_path, index=False)
+            with open_text(output_path, "w", newline="") as f:
+                df.to_csv(f, index=False)
 
         elif format == "parquet":
+            reject_zstd_parquet(output_path)
             df = results.to_dataframe()
             df.to_parquet(output_path)
 
