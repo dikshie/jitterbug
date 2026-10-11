@@ -13,27 +13,27 @@ Use this workflow to sync your local `main` branch and fork with upstream change
 ### Step 1: Ensure your working tree is clean
 Check that you do not have uncommitted changes:
 ```bash
-rtk git status
+git status
 ```
 If you have work in progress, stash it (`git stash`) or commit it to a feature branch.
 
 ### Step 2: Switch to the `main` branch
 ```bash
-rtk git checkout main
+git checkout main
 ```
 
 ### Step 3: Fetch the latest changes from upstream
 ```bash
-rtk git fetch upstream
+git fetch upstream
 ```
 
 ### Step 4: Merge upstream into your local `main`
 ```bash
 # If your local main has no divergent commits (fast-forward):
-rtk git merge --ff-only upstream/main
+git merge --ff-only upstream/main
 
 # Or if you have local commits on main and want a standard merge:
-rtk git merge upstream/main
+git merge upstream/main
 ```
 
 ### Step 5: Sync the environment and verify
@@ -46,7 +46,7 @@ uv run pytest -m "not slow"
 
 ### Step 6: Push the updated `main` to your fork
 ```bash
-rtk git push origin main
+git push origin main
 ```
 
 ---
@@ -57,23 +57,23 @@ When developing a feature branch (e.g., `feat/my-feature`), keep it synchronized
 
 ### Step 1: Fetch upstream and switch to your feature branch
 ```bash
-rtk git fetch upstream
-rtk git checkout feat/my-feature
+git fetch upstream
+git checkout feat/my-feature
 ```
 
 ### Step 2: Rebase or merge from upstream
 ```bash
 # Option A: Rebase (recommended for linear git history)
-rtk git rebase upstream/main
+git rebase upstream/main
 
 # Option B: Standard merge commit
-rtk git merge upstream/main
+git merge upstream/main
 ```
 If merge conflicts occur, resolve them in your editor, stage the files (`git add <file>`), and continue:
 ```bash
-rtk git rebase --continue
+git rebase --continue
 # or if merging:
-rtk git commit
+git commit
 ```
 
 ---
@@ -93,7 +93,7 @@ uv run pytest
 
 ### Step 2: Push your feature branch to your fork
 ```bash
-rtk git push -u origin feat/my-feature
+git push -u origin feat/my-feature
 ```
 
 ### Step 3: Open the Pull Request
